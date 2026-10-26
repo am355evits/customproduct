@@ -1,0 +1,642 @@
+{%- comment -%}
+  Daycare label personalizer — no app required.
+
+  INSTALL
+    1. Theme assets
+       Upload every file from daycare-pdp-assets.zip into the theme's Assets
+       folder (75 files: 34 backgrounds, 25 icons, 16 fonts). Shopify CLI is
+       faster than the admin uploader: shopify theme push --only assets
+    2. Snippet
+       Save this file as snippets/daycare-personalizer.liquid
+    3. Render it INSIDE the product form, in sections/main-product.liquid,
+       between the variant picker and the buy buttons:
+         {% render 'daycare-personalizer' %}
+       Rendering it inside the form matters. The block also re-attaches its
+       hidden inputs if the theme re-renders the form, but native placement is
+       cleaner.
+    4. Lock each product to one icon set, either by passing it:
+         {% render 'daycare-personalizer', icon_set: 'Dolphin' %}
+       or by setting a product metafield custom.icon_set (single line text) to
+       one of: Animal, Dinosaurs, Dolphin, Space, Sports.
+       Left blank, the customer picks the set themselves.
+    5. PRINT FILES (high-res originals, Content > Files me)
+         Icons       print_ANIMAL_1.png ... print_ANIMAL_5.png
+                     print_DINOSAURS_1.png, print_DOLPHIN_1.png,
+                     print_SPACE_1.png, print_SPORT_1.png ... (har set 1 se 5)
+         Backgrounds print_LABEL_1.svg, print_LABEL_2.svg ... print_LABEL_34.svg
+                     (LABEL_N = backgrounds list me N-th background)
+       Backgrounds: SVG (width/height ya viewBox ke saath) ya at least 1800x600 px.
+       Icons: at least ~520 px tall, same aspect ratio as the preview version.
+       If a print_ file is missing, the preview image is used instead.
+
+  WHAT REACHES THE ORDER
+    Line item properties: Design, Icon, Background, Name, Font, Text color, a
+    hidden _spec holding the exact asset ids, and 2 files:
+      - Preview           small PNG (450x150), sirf dikhane ke liye
+      - Print file (SVG)  label-PRINT.svg, exactly 1.5in x 0.5in. Background
+                          vector hi rehta hai (agar print_LABEL SVG hai), icon
+                          original high-res PNG se, aur text OUTLINES (paths)
+                          me convert hota hai, isliye kisi bhi software/printer
+                          me font ki zarurat nahi.
+
+  NOTES FOR THE DEVELOPER
+    - No app, no external requests. Fonts and art are served from theme assets.
+    - Images load on demand, so the page does not pull the full set up front.
+    - Requires no theme settings and touches no other file.
+    - To restyle, override the .dc- classes; nothing uses !important.
+    - Print PNG has a full rectangle (no rounded corners, no bleed). Cutting
+      is done by the printer's die-line.
+{%- endcomment -%}
+
+{%- assign dc_set = icon_set | default: product.metafields.custom.icon_set -%}
+{%- assign dc_id = 'dc-' | append: section.id | default: 'dc-personalizer' -%}
+
+<style>
+  @media (min-width: 750px){
+  .product__media-wrapper{
+    align-self: flex-start;      /* grid item ko poori height na mile, tabhi sticky chalega */
+    position: sticky;
+    top: 20px;
+  }
+  .product__media-wrapper .dc-preview{
+    margin-bottom: 0;
+  }
+}
+
+  .dc-wrap{--dc-line:#e2e2e6;--dc-ink:#1d1d20;--dc-mute:#6b6b76;--dc-accent:#1f5f57;
+  font-family:inherit;color:var(--dc-ink);max-width:640px;margin:0 0 28px}
+.dc-wrap *{box-sizing:border-box}
+.dc-wrap h3{font-size:1rem;margin:0 0 10px;font-weight:600;display:flex;gap:8px;align-items:baseline}
+.dc-wrap h3 span{font-weight:400;color:var(--dc-mute);font-size:.85rem;margin-left:auto}
+.dc-step{margin-bottom:22px}
+.dc-hint{margin:0 0 8px;font-size:.85rem;color:var(--dc-mute)}
+
+.dc-preview{background:#f5f5f7;border-radius:12px;padding:22px;margin-bottom:22px;text-align:center}
+.dc-preview canvas{height:auto;filter:drop-shadow(0 3px 10px rgba(0,0,0,.16))}
+.dc-warn{margin:10px 0 0;color:#b4472b;font-size:.85rem;min-height:1.1em}
+
+.dc-themes{display:flex;flex-wrap:wrap;gap:8px}
+.dc-th{border:1px solid var(--dc-line);background:#fff;border-radius:999px;
+  padding:7px 16px;cursor:pointer;font-size:.9rem}
+.dc-th[aria-pressed="true"]{border-color:var(--dc-accent);background:var(--dc-accent);color:#fff}
+
+.dc-icons{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;max-width:360px}
+.dc-ic{border:2px solid var(--dc-line);background:#fff;border-radius:10px;padding:6px;cursor:pointer;aspect-ratio:1}
+.dc-ic img{width:100%;height:100%;object-fit:contain;display:block}
+.dc-ic[aria-pressed="true"]{border-color:var(--dc-accent)}
+
+.dc-bgs{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:7px}
+.dc-sw{border:2px solid var(--dc-line);background:#fff;border-radius:8px;padding:3px;cursor:pointer}
+.dc-sw img{width:100%;height:20px;object-fit:cover;border-radius:4px;display:block}
+.dc-sw[aria-pressed="true"]{border-color:var(--dc-accent)}
+
+.dc-wrap textarea{width:100%;padding:11px 13px;border:1px solid var(--dc-line);
+  border-radius:10px;font:inherit;resize:vertical;min-height:72px}
+.dc-wrap textarea:focus{outline:2px solid var(--dc-accent);outline-offset:1px}
+.dc-count{text-align:right;font-size:.8rem;color:var(--dc-mute);margin-top:4px}
+
+.dc-fonts{border:1px solid var(--dc-line);border-radius:10px;max-height:250px;overflow:auto}
+.dc-fo{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--dc-line);
+  background:#fff;padding:9px 14px;cursor:pointer;font-size:1.25rem;line-height:1.35;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-fo:last-child{border-bottom:0}
+.dc-fo[aria-pressed="true"]{background:#eef4f3;box-shadow:inset 3px 0 0 var(--dc-accent)}
+
+.dc-colors{display:grid;grid-template-columns:repeat(auto-fill,minmax(40px,1fr));gap:9px}
+.dc-dot{aspect-ratio:1;border-radius:50%;border:1px solid rgba(0,0,0,.18);cursor:pointer;padding:0}
+.dc-dot[aria-pressed="true"]{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--dc-accent)}
+
+@media (max-width:560px){
+  .dc-icons{max-width:none}
+  .dc-fo{font-size:1.1rem}
+}
+.product-form__quantity ,
+.product--no-media .product-form__quantity
+{
+  display:none;
+}
+</style>
+
+<div class="dc-wrap" id="{{ dc_id }}">
+  <div class="dc-preview">
+    <canvas data-dc="canvas" aria-label="Preview of your label"></canvas>
+    <p class="dc-warn" data-dc="warn"></p>
+  </div>
+
+  <div class="dc-step" data-dc="themestep">
+    <h3>1. Choose your design</h3>
+    <div class="dc-themes" data-dc="themes"></div>
+  </div>
+
+  <div class="dc-step">
+    <h3>2. Choose your icon</h3>
+    <div class="dc-icons" data-dc="icons"></div>
+  </div>
+
+  <div class="dc-step">
+    <h3>3. Choose your background <span data-dc="bgname"></span></h3>
+    <div class="dc-bgs" data-dc="bgs"></div>
+  </div>
+
+  <div class="dc-step">
+    <h3>4. Enter the name</h3>
+    <p class="dc-hint">Press Enter for a second line. Long names shrink to fit.</p>
+    <textarea data-dc="name" maxlength="100" rows="2" placeholder="Grace Turner"></textarea>
+    <div class="dc-count"><span data-dc="count">0 / 100</span></div>
+  </div>
+
+  <div class="dc-step">
+    <h3>5. Choose your font <span data-dc="fontname"></span></h3>
+    <div class="dc-fonts" data-dc="fonts"></div>
+  </div>
+
+  <div class="dc-step">
+    <h3>6. Choose your text color <span data-dc="colorname"></span></h3>
+    <div class="dc-colors" data-dc="colors"></div>
+  </div>
+
+  <div data-dc="props" hidden>
+    <input type="hidden" name="properties[Design]" data-prop="Design">
+    <input type="hidden" name="properties[Icon]" data-prop="Icon">
+    <input type="hidden" name="properties[Background]" data-prop="Background">
+    <input type="hidden" name="properties[Name]" data-prop="Name">
+    <input type="hidden" name="properties[Font]" data-prop="Font">
+    <input type="hidden" name="properties[Text color]" data-prop="Text color">
+    <input type="hidden" name="properties[_spec]" data-prop="_spec">
+    <input type="file" name="properties[Preview]" data-prop-file="Preview" accept="image/png">
+    <input type="file" name="properties[Print file (SVG)]" data-prop-file="Print" accept="image/svg+xml">
+</div>
+</div>
+
+
+<script>
+window.DAYCARE_DATA = {
+  rootId: "{{ dc_id }}",
+  base: "{{ 'https://cdn.shopify.com/s/files/1/0643/0667/5781/files/' | split: 'dcbg01.webp' | first }}",
+  labelW: 1.5, labelH: 0.5,
+  sampleName: "Your Name",
+  lockedTheme: {% if dc_set != blank %}{{ dc_set | json }}{% else %}null{% endif %},
+  backgrounds: [{"id":"bg01","label":"Rainbow fade","file":"dcbg01.webp","dom":"#eeab8c","patterned":true},{"id":"bg02","label":"White","file":"dcbg02.webp","dom":"#ffffff","patterned":false},{"id":"bg03","label":"Black","file":"dcbg03.webp","dom":"#181919","patterned":false},{"id":"bg04","label":"Bubbles","file":"dcbg04.webp","dom":"#81afd3","patterned":true},{"id":"bg05","label":"Leaves","file":"dcbg05.webp","dom":"#abd5ac","patterned":true},{"id":"bg06","label":"Paw prints","file":"dcbg06.webp","dom":"#aa9786","patterned":true},{"id":"bg07","label":"Sunburst","file":"dcbg07.webp","dom":"#769ccd","patterned":true},{"id":"bg08","label":"Night sky","file":"dcbg08.webp","dom":"#1b1f27","patterned":true},{"id":"bg09","label":"Gray","file":"dcbg09.webp","dom":"#b0b0b0","patterned":false},{"id":"bg10","label":"Aqua","file":"dcbg10.webp","dom":"#96d7e5","patterned":false},{"id":"bg11","label":"Baby blue","file":"dcbg11.webp","dom":"#aedef7","patterned":false},{"id":"bg12","label":"Steel blue","file":"dcbg12.webp","dom":"#76a6bf","patterned":false},{"id":"bg13","label":"Steel blue 2","file":"dcbg13.webp","dom":"#76a6bf","patterned":false},{"id":"bg14","label":"Ocean blue","file":"dcbg14.webp","dom":"#3187b5","patterned":false},{"id":"bg15","label":"Navy","file":"dcbg15.webp","dom":"#264471","patterned":false},{"id":"bg16","label":"Forest green","file":"dcbg16.webp","dom":"#5d6e49","patterned":false},{"id":"bg17","label":"Sage green","file":"dcbg17.webp","dom":"#8d9c7f","patterned":false},{"id":"bg18","label":"Lime green","file":"dcbg18.webp","dom":"#aed285","patterned":false},{"id":"bg19","label":"Cream","file":"dcbg19.webp","dom":"#fcf1c4","patterned":false},{"id":"bg20","label":"Golden yellow","file":"dcbg20.webp","dom":"#f9de91","patterned":false},{"id":"bg21","label":"Lemon yellow","file":"dcbg21.webp","dom":"#fbf08a","patterned":false},{"id":"bg22","label":"Peach","file":"dcbg22.webp","dom":"#e8a380","patterned":false},{"id":"bg23","label":"Coral","file":"dcbg23.webp","dom":"#ee7e7b","patterned":false},{"id":"bg24","label":"Burnt orange","file":"dcbg24.webp","dom":"#db5d41","patterned":false},{"id":"bg25","label":"Brick red","file":"dcbg25.webp","dom":"#9b2420","patterned":false},{"id":"bg26","label":"Raspberry","file":"dcbg26.webp","dom":"#a51d55","patterned":false},{"id":"bg27","label":"Hot pink","file":"dcbg27.webp","dom":"#e35b99","patterned":false},{"id":"bg28","label":"Blush pink","file":"dcbg28.webp","dom":"#f3a3b9","patterned":false},{"id":"bg29","label":"Lilac","file":"dcbg29.webp","dom":"#d9c6d5","patterned":false},{"id":"bg30","label":"Light purple","file":"dcbg30.webp","dom":"#d2b6d7","patterned":false},{"id":"bg31","label":"Light purple 2","file":"dcbg31.webp","dom":"#d2b6d7","patterned":false},{"id":"bg32","label":"Orchid","file":"dcbg32.webp","dom":"#bd78aa","patterned":false},{"id":"bg33","label":"Brown","file":"dcbg33.webp","dom":"#764325","patterned":false},{"id":"bg34","label":"Tan","file":"dcbg34.webp","dom":"#caae9e","patterned":false}],
+  icons: [{"id":"ANIMAL-1","theme":"Animal","label":"Animal 1","w":327,"h":340,"file":"dcic_ANIMAL-1.webp"},{"id":"ANIMAL-2","theme":"Animal","label":"Animal 2","w":314,"h":340,"file":"dcic_ANIMAL-2.webp"},{"id":"ANIMAL-3","theme":"Animal","label":"Animal 3","w":340,"h":305,"file":"dcic_ANIMAL-3.webp"},{"id":"ANIMAL-4","theme":"Animal","label":"Animal 4","w":320,"h":340,"file":"dcic_ANIMAL-4.webp"},{"id":"ANIMAL-5","theme":"Animal","label":"Animal 5","w":324,"h":340,"file":"dcic_ANIMAL-5.webp"},{"id":"DINOSAURS-1","theme":"Dinosaurs","label":"Dinosaurs 1","w":235,"h":340,"file":"dcic_DINOSAURS-1.webp"},{"id":"DINOSAURS-2","theme":"Dinosaurs","label":"Dinosaurs 2","w":273,"h":340,"file":"dcic_DINOSAURS-2.webp"},{"id":"DINOSAURS-3","theme":"Dinosaurs","label":"Dinosaurs 3","w":340,"h":276,"file":"dcic_DINOSAURS-3.webp"},{"id":"DINOSAURS-4","theme":"Dinosaurs","label":"Dinosaurs 4","w":340,"h":300,"file":"dcic_DINOSAURS-4.webp"},{"id":"DINOSAURS-5","theme":"Dinosaurs","label":"Dinosaurs 5","w":340,"h":221,"file":"dcic_DINOSAURS-5.webp"},{"id":"DOLPHIN-1","theme":"Dolphin","label":"Dolphin 1","w":326,"h":340,"file":"dcic_DOLPHIN-1.webp"},{"id":"DOLPHIN-2","theme":"Dolphin","label":"Dolphin 2","w":340,"h":314,"file":"dcic_DOLPHIN-2.webp"},{"id":"DOLPHIN-3","theme":"Dolphin","label":"Dolphin 3","w":340,"h":330,"file":"dcic_DOLPHIN-3.webp"},{"id":"DOLPHIN-4","theme":"Dolphin","label":"Dolphin 4","w":340,"h":276,"file":"dcic_DOLPHIN-4.webp"},{"id":"DOLPHIN-5","theme":"Dolphin","label":"Dolphin 5","w":340,"h":232,"file":"dcic_DOLPHIN-5.webp"},{"id":"SPACE-1","theme":"Space","label":"Space 1","w":308,"h":340,"file":"dcic_SPACE-1.webp"},{"id":"SPACE-2","theme":"Space","label":"Space 2","w":308,"h":340,"file":"dcic_SPACE-2.webp"},{"id":"SPACE-3","theme":"Space","label":"Space 3","w":340,"h":252,"file":"dcic_SPACE-3.webp"},{"id":"SPACE-4","theme":"Space","label":"Space 4","w":340,"h":254,"file":"dcic_SPACE-4.webp"},{"id":"SPACE-5","theme":"Space","label":"Space 5","w":340,"h":252,"file":"dcic_SPACE-5.webp"},{"id":"SPORT-1","theme":"Sports","label":"Sport 1","w":340,"h":312,"file":"dcic_SPORT-1.webp"},{"id":"SPORT-2","theme":"Sports","label":"Sport 2","w":340,"h":328,"file":"dcic_SPORT-2.webp"},{"id":"SPORT-3","theme":"Sports","label":"Sport 3","w":340,"h":302,"file":"dcic_SPORT-3.webp"},{"id":"SPORT-4","theme":"Sports","label":"Sport 4","w":340,"h":303,"file":"dcic_SPORT-4.webp"},{"id":"SPORT-5","theme":"Sports","label":"Sport 5","w":340,"h":301,"file":"dcic_SPORT-5.webp"}],
+  fonts: [{"family":"Lato","file":"dcfont_Lato.woff"},{"family":"Montserrat","file":"dcfont_Montserrat.woff"},{"family":"Montserrat Alternates","file":"dcfont_Montserrat_Alternates.woff"},{"family":"Oswald","file":"dcfont_Oswald.woff"},{"family":"Anton","file":"dcfont_Anton.woff"},{"family":"Antonio","file":"dcfont_Antonio.woff"},{"family":"Archivo Black","file":"dcfont_Archivo_Black.woff"},{"family":"Bangers","file":"dcfont_Bangers.woff"},{"family":"Bebas Neue","file":"dcfont_Bebas_Neue.woff"},{"family":"Cormorant Garamond","file":"dcfont_Cormorant_Garamond.woff"},{"family":"Homemade Apple","file":"dcfont_Homemade_Apple.woff"},{"family":"Josefin Sans","file":"dcfont_Josefin_Sans.woff"},{"family":"Libre Baskerville","file":"dcfont_Libre_Baskerville.woff"},{"family":"Playfair Display","file":"dcfont_Playfair_Display.woff"},{"family":"Playfair Display SC","file":"dcfont_Playfair_Display_SC.woff"},{"family":"Source Code Pro","file":"dcfont_Source_Code_Pro.woff"}],
+  colors: [["Black","#000000"],["White","#ffffff"],["Dark Gray","#545454"],["Gray","#737373"],["Light Gray","#d9d9d9"],["Red","#eb473e"],["Salmon","#ec635e"],["Pink","#ed70c1"],["Light Purple","#bf71e0"],["Purple","#8455f6"],["Dark Purple","#561de2"],["Teal","#4395af"],["Light Blue","#60b4f9"],["Blue","#1d49a7"],["Navy","#293f8d"],["Green","#56bc6d"],["Light Green","#94d769"],["Yellow","#fadf70"],["Light Orange","#f5c06a"],["Orange","#f0975b"]]
+};
+</script>
+<script>/* Daycare label personalizer — shared engine.
+   ASSET_BASE is set by the page: a Shopify asset_url prefix, or "" when the
+   images and fonts are embedded as data URLs.                                 */
+(function () {
+  const D = window.DAYCARE_DATA;
+  const root = document.getElementById(D.rootId);
+  if (!root || !D) return;
+
+  const url = f => (D.assets && D.assets[f]) ? D.assets[f] : (D.base + f);
+  const $ = s => root.querySelector(s) || document.querySelector(s);
+  const $$ = s => [...root.querySelectorAll(s)];
+
+  const COLORS = D.colors;
+  const LW = D.labelW, LH = D.labelH;
+  const R = 0.0867 / LH;                        // corner radius as a fraction
+
+  const LAYOUT = {
+    iconX: 0.035, iconW: 0.360, iconH: 0.850,
+    gap: 0.030, right: 0.965, y: 0.120, h: 0.760, lh: 1.00, maxLines: 2
+  };
+
+  const state = {
+    theme: D.lockedTheme || null,
+    bg: D.backgrounds[10] ? D.backgrounds[10].id : D.backgrounds[0].id,
+    icon: null, font: D.fonts[0].family,
+    color: COLORS[0][1], colorName: COLORS[0][0], name: ""
+  };
+
+  const imgs = {};
+  const pending = {};
+  function need(key, src) {
+    if (imgs[key]) return Promise.resolve();
+    if (!pending[key]) pending[key] = loadImage(key, src);
+    return pending[key];
+  }
+  async function needCurrent() {
+    const b = bgById(state.bg), i = icById(state.icon);
+    await Promise.all([
+      b ? need("b:" + b.id, url(b.file)) : null,
+      i ? need("i:" + i.id, url(i.file)) : null
+    ].filter(Boolean));
+  }
+  const themes = [...new Set(D.icons.map(i => i.theme))];
+  if (!state.theme) state.theme = themes[0];
+  state.icon = D.icons.filter(i => i.theme === state.theme)[0].id;
+
+  const bgById = id => D.backgrounds.find(b => b.id === id);
+  const icById = id => D.icons.find(i => i.id === id);
+
+  /* ---------- assets ---------- */
+  function loadImage(key, src) {
+    return new Promise(res => {
+      const im = new Image();
+      im.crossOrigin = "anonymous";
+      im.onload = im.onerror = () => { imgs[key] = im; res(); };
+      im.src = src;
+    });
+  }
+  async function loadFonts() {
+    await Promise.all(D.fonts.map(async f => {
+      try {
+        const face = new FontFace(f.family, `url(${url(f.file)}) format("woff")`);
+        await face.load(); document.fonts.add(face);
+      } catch (e) { /* that family will fall back */ }
+    }));
+  }
+
+  /* ---------- shared layout math (used by canvas draw + SVG build) ---------- */
+  function computeIconBox(W, H) {
+    const ic = icById(state.icon);
+    let right = LAYOUT.iconX, box = null;
+    if (ic) {
+      const bw = LAYOUT.iconW * W, bh = LAYOUT.iconH * H;
+      const by = (H - bh) / 2;
+      const k = Math.min(bw / ic.w, bh / ic.h);
+      const w = ic.w * k, h = ic.h * k;
+      const x = LAYOUT.iconX * W + (bw - w) / 2, y = by + (bh - h) / 2;
+      right = (x + w) / W;
+      box = { x, y, w, h };
+    }
+    return { right, box };
+  }
+
+  function computeTextLayout(ctx, W, H, right) {
+    const raw = String(state.name || "");
+    if (!raw.trim()) return null;
+    const left = Math.min(right + LAYOUT.gap, LAYOUT.right - 0.08);
+    const box = { x: left * W, y: LAYOUT.y * H, w: (LAYOUT.right - left) * W, h: LAYOUT.h * H };
+    const setF = px => { ctx.font = `${px}px "${state.font}", sans-serif`; };
+    const wOf = (t, px) => { setF(px); return ctx.measureText(t).width; };
+    const explicit = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const linesAt = px => explicit.length > 1 ? explicit
+      : wrap(explicit[0], box.w, t => wOf(t, px), LAYOUT.maxLines);
+    const fits = px => {
+      const l = linesAt(px);
+      return px * LAYOUT.lh * l.length <= box.h && l.every(t => wOf(t, px) <= box.w);
+    };
+    let lo = 1, hi = H * 2.5;
+    for (let i = 0; i < 38; i++) { const m = (lo + hi) / 2; if (fits(m)) lo = m; else hi = m; }
+    const px = lo;
+    setF(px);
+    const lines = linesAt(px);
+    const m0 = ctx.measureText(lines[0]), mN = ctx.measureText(lines[lines.length - 1]);
+    const asc = m0.actualBoundingBoxAscent || px * 0.72;
+    const desc = mN.actualBoundingBoxDescent || px * 0.24;
+    const step = px * LAYOUT.lh;
+    const blockH = asc + desc + step * (lines.length - 1);
+    let base = box.y + (box.h - blockH) / 2 + asc;
+    const linePos = lines.map(t => { const y = base; base += step; return { t, y }; });
+    return { box, px, lines: linePos, over: !fits(px) };
+  }
+
+  function wrap(text, maxW, measure, maxLines) {
+    const w = text.split(/\s+/).filter(Boolean);
+    if (!w.length) return [text];
+    const out = []; let cur = w[0];
+    for (let i = 1; i < w.length; i++) {
+      const t = cur + " " + w[i];
+      if (measure(t) <= maxW || out.length + 1 >= maxLines) cur = t;
+      else { out.push(cur); cur = w[i]; }
+    }
+    out.push(cur); return out;
+  }
+
+  /* ---------- drawing (canvas / PNG) ---------- */
+  function draw(canvas, dpi) {
+    const W = Math.round(LW * dpi), H = Math.round(LH * dpi);
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    ctx.imageSmoothingQuality = "high";
+
+    const bgi = imgs["b:" + state.bg];
+    if (bgi && bgi.complete) ctx.drawImage(bgi, 0, 0, W, H);
+
+    const { right, box: iconBox } = computeIconBox(W, H);
+    if (iconBox) {
+      const im = imgs["i:" + state.icon];
+      if (im && im.complete) ctx.drawImage(im, iconBox.x, iconBox.y, iconBox.w, iconBox.h);
+    }
+
+    const tl = computeTextLayout(ctx, W, H, right);
+    if (!tl) return { size: 0, lines: 0, over: false };
+
+    ctx.fillStyle = state.color;
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "center";
+    ctx.font = `${tl.px}px "${state.font}", sans-serif`;
+    tl.lines.forEach(({ t, y }) => ctx.fillText(t, tl.box.x + tl.box.w / 2, y));
+    return { size: tl.px, lines: tl.lines.length, over: tl.over };
+  }
+
+  /* ---------- PRINT FILE: ek hi SVG, text outlines me ----------
+     Naam ka niyam (Content > Files me upload karo):
+       icon        ANIMAL-1 -> print_ANIMAL_1.png   (DINOSAURS, DOLPHIN, SPACE, SPORT bhi aise hi)
+       background  bg01     -> print_LABEL_1.svg    (bg02 -> print_LABEL_2.svg ... bg34 -> print_LABEL_34.svg)
+     Shopify upload me spaces ko "_" bana deta hai, par dono naam try hote hain.
+     Jo print_ file na mile, uski jagah preview image use hoti hai.
+     Text ko paths me badalne ke liye opentype.js ek baar CDN se load hota hai;
+     agar wo load na ho to text live <text> + embedded font ke roop me jata hai. */
+  const PW = 1800, PH = 600;     // SVG ke andar ki units (design ka ratio 3:1)
+  const OPENTYPE_URL = "https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js";
+
+  const printNames = {
+    i: id => {
+      const u = "print_" + id.replace("-", "_");
+      const sp = "print_" + id.replace("-", "%20");
+      return [u + ".png", sp + ".png", u + ".webp"];
+    },
+    b: id => {
+      const n = parseInt(id.replace(/\D+/g, ""), 10);
+      const u = "print_LABEL_" + n;
+      return [u + ".svg", u + ".png", u + ".webp"];
+    }
+  };
+
+  function escapeXML(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+
+  const assets = {};   // "b:id" / "i:id" -> { svg | data, name } ya null
+  async function getAsset(key, files) {
+    if (key in assets) return assets[key];
+    for (const f of files) {
+      try {
+        const r = await fetch(url(f));
+        if (!r.ok) continue;
+        assets[key] = /\.svg$/i.test(f)
+          ? { svg: await r.text(), name: f }
+          : { data: await blobToDataURL(await r.blob()), name: f };
+        return assets[key];
+      } catch (e) { /* agli file try karo */ }
+    }
+    assets[key] = null;
+    return null;
+  }
+  const hrefOf = a => a.data || ("data:image/svg+xml;charset=utf-8," + encodeURIComponent(a.svg));
+
+  // background SVG ko seedha print SVG ke andar daalta hai (vector hi rehta hai)
+  function inlineSVG(text, W, H) {
+    try {
+      const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+      const svg = doc.documentElement;
+      if (!svg || svg.nodeName.toLowerCase() !== "svg" || doc.querySelector("parsererror")) return null;
+      svg.querySelectorAll("script,foreignObject").forEach(n => n.remove());
+      let vb = svg.getAttribute("viewBox");
+      if (!vb) {
+        const w = parseFloat(svg.getAttribute("width")), h = parseFloat(svg.getAttribute("height"));
+        if (!w || !h) return null;
+        vb = "0 0 " + w + " " + h;
+      }
+      const ser = new XMLSerializer();
+      const inner = [...svg.childNodes].map(n => ser.serializeToString(n)).join("");
+      return `<svg x="0" y="0" width="${W}" height="${H}" viewBox="${vb}" preserveAspectRatio="none">${inner}</svg>`;
+    } catch (e) { return null; }
+  }
+
+  let otPromise = null;
+  function loadOpentype() {
+    if (window.opentype) return Promise.resolve(window.opentype);
+    if (!otPromise) otPromise = new Promise(res => {
+      const sc = document.createElement("script");
+      sc.src = OPENTYPE_URL;
+      sc.onload = () => res(window.opentype || null);
+      sc.onerror = () => res(null);
+      document.head.appendChild(sc);
+    });
+    return otPromise;
+  }
+  const otFonts = {};
+  async function getOtFont(family, ot) {
+    if (family in otFonts) return otFonts[family];
+    const f = D.fonts.find(x => x.family === family);
+    try {
+      const buf = await (await fetch(url(f.file))).arrayBuffer();
+      otFonts[family] = ot.parse(buf);
+    } catch (e) { otFonts[family] = null; }
+    return otFonts[family];
+  }
+  async function fontDataURL(family) {
+    const f = D.fonts.find(x => x.family === family);
+    try { return await blobToDataURL(await (await fetch(url(f.file))).blob()); }
+    catch (e) { return null; }
+  }
+
+  async function buildPrintSVG() {
+    const b = bgById(state.bg), ic = icById(state.icon);
+    const bgA = await getAsset("b:" + b.id, printNames.b(b.id).concat(b.file));
+    const icA = ic ? await getAsset("i:" + ic.id, printNames.i(ic.id).concat(ic.file)) : null;
+    console.info("dc print:", "bg ->", bgA ? bgA.name : "(rang)", "| icon ->", icA ? icA.name : "-");
+
+    const measCtx = document.createElement("canvas").getContext("2d");
+    const { right, box: iconBox } = computeIconBox(PW, PH);
+    const tl = computeTextLayout(measCtx, PW, PH, right);
+
+    let bgEl;
+    if (bgA && bgA.svg) {
+      bgEl = inlineSVG(bgA.svg, PW, PH)
+        || `<image href="${hrefOf(bgA)}" xlink:href="${hrefOf(bgA)}" x="0" y="0" width="${PW}" height="${PH}" preserveAspectRatio="none"/>`;
+    } else if (bgA) {
+      bgEl = `<image href="${bgA.data}" xlink:href="${bgA.data}" x="0" y="0" width="${PW}" height="${PH}" preserveAspectRatio="none"/>`;
+    } else {
+      bgEl = `<rect x="0" y="0" width="${PW}" height="${PH}" fill="${b.dom || "#ffffff"}"/>`;
+    }
+
+    const icEl = (icA && iconBox)
+      ? `<image href="${hrefOf(icA)}" xlink:href="${hrefOf(icA)}" x="${iconBox.x.toFixed(2)}" y="${iconBox.y.toFixed(2)}" width="${iconBox.w.toFixed(2)}" height="${iconBox.h.toFixed(2)}" preserveAspectRatio="xMidYMid meet"/>`
+      : "";
+
+    let defs = "", textEl = "";
+    if (tl) {
+      const cx = tl.box.x + tl.box.w / 2;
+      const ot = await loadOpentype();
+      const font = ot ? await getOtFont(state.font, ot) : null;
+      if (font) {
+        textEl = tl.lines.map(({ t, y }) => {
+          const w = font.getAdvanceWidth(t, tl.px);
+          return `<path d="${font.getPath(t, cx - w / 2, y, tl.px).toPathData(2)}" fill="${state.color}"/>`;
+        }).join("");
+      } else {
+        const fd = await fontDataURL(state.font);
+        if (fd) defs = `<defs><style>@font-face{font-family:"${escapeXML(state.font)}";src:url(${fd}) format("woff");}</style></defs>`;
+        textEl = tl.lines.map(({ t, y }) =>
+          `<text x="${cx.toFixed(2)}" y="${y.toFixed(2)}" font-family="${escapeXML(state.font)}, sans-serif" font-size="${tl.px.toFixed(2)}" fill="${state.color}" text-anchor="middle">${escapeXML(t)}</text>`
+        ).join("");
+      }
+    }
+
+    return `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${LW}in" height="${LH}in" viewBox="0 0 ${PW} ${PH}">` +
+      `<title>Label ${escapeXML(state.name.replace(/\s+/g, " ").trim())}</title>` +
+      defs + bgEl + icEl + textEl + `</svg>`;
+  }
+
+  let printTimer = null, printSeq = 0;
+  function attachPrintFile() {
+    clearTimeout(printTimer);
+    printTimer = setTimeout(async () => {
+      const input = document.querySelector('[data-prop-file="Print"]');
+      if (!input) return;
+      const seq = ++printSeq;
+      try {
+        const svg = await buildPrintSVG();
+        if (seq !== printSeq) return;               // beech me design badal gaya
+        const file = new File([svg], "label-PRINT.svg", { type: "image/svg+xml" });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+      } catch (e) { console.error("print file error:", e); }
+    }, 400);   // har keystroke par heavy build na ho
+  }
+
+  /* ---------- interface ---------- */
+  function paintSwatches() {
+    $("[data-dc=bgs]").innerHTML = D.backgrounds.map(b =>
+      `<button type="button" class="dc-sw" data-id="${b.id}" title="${b.label}"
+        aria-pressed="${b.id === state.bg}"><img src="${url(b.file)}" alt="${b.label}" loading="lazy"></button>`).join("");
+    $$("[data-dc=bgs] button").forEach(el => el.onclick = () => {
+      state.bg = el.dataset.id; paintSwatches(); update();
+    });
+    $("[data-dc=bgname]").textContent = (bgById(state.bg) || {}).label || "";
+
+    const pool = D.icons.filter(i => i.theme === state.theme);
+    $("[data-dc=icons]").innerHTML = pool.map(i =>
+      `<button type="button" class="dc-ic" data-id="${i.id}" title="${i.label}"
+        aria-pressed="${i.id === state.icon}"><img src="${url(i.file)}" alt="${i.label}" loading="lazy"></button>`).join("");
+    $$("[data-dc=icons] button").forEach(el => el.onclick = () => {
+      state.icon = el.dataset.id; paintSwatches(); update();
+    });
+
+    const sample = (state.name.split(/\r?\n/)[0] || "").trim() || D.sampleName;
+    $("[data-dc=fonts]").innerHTML = D.fonts.map(f =>
+      `<button type="button" class="dc-fo" data-f="${f.family}" aria-pressed="${f.family === state.font}"
+        style="font-family:'${f.family}',sans-serif">${sample.replace(/[<&]/g, "")}</button>`).join("");
+    $$("[data-dc=fonts] button").forEach(el => el.onclick = () => {
+      state.font = el.dataset.f; paintSwatches(); update();
+    });
+    $("[data-dc=fontname]").textContent = state.font;
+
+    $("[data-dc=colors]").innerHTML = COLORS.map(([n, h]) =>
+      `<button type="button" class="dc-dot" data-h="${h}" data-n="${n}" title="${n}" aria-label="${n}"
+        style="background:${h}" aria-pressed="${h === state.color}"></button>`).join("");
+    $$("[data-dc=colors] button").forEach(el => el.onclick = () => {
+      state.color = el.dataset.h; state.colorName = el.dataset.n; paintSwatches(); update();
+    });
+    $("[data-dc=colorname]").textContent = state.colorName;
+
+    if (D.lockedTheme) { const t = $("[data-dc=themes]"); if (t) t.style.display = "none"; }
+    else {
+      $("[data-dc=themes]").innerHTML = themes.map(t =>
+        `<button type="button" class="dc-th" data-t="${t}" aria-pressed="${t === state.theme}">${t}</button>`).join("");
+      $$("[data-dc=themes] button").forEach(el => el.onclick = () => {
+        state.theme = el.dataset.t;
+        state.icon = D.icons.filter(i => i.theme === state.theme)[0].id;
+        paintSwatches(); update();
+      });
+    }
+  }
+
+  async function update() {
+    await needCurrent();
+    const canvas = $("[data-dc=canvas]");
+    const r = draw(canvas, 300);
+    $("[data-dc=warn]").textContent = r.over
+      ? "That name is a little long for this label. Try a shorter one."
+      : "";
+    const set = (k, v) => { const el = document.querySelector(`[data-prop="${k}"]`); if (el) el.value = v; };
+    const ic = icById(state.icon) || {};
+    set("Design", state.theme || "");
+    set("Background", (bgById(state.bg) || {}).label || "");
+    set("Icon", (ic.theme || "") + " " + (ic.label || "").replace(/\D+/g, ""));
+    set("Font", state.font);
+    set("Text color", state.colorName);
+    set("Name", state.name);
+    set("_spec", [state.bg, state.icon, state.font, state.color].join("|"));
+
+    // canvas ka PNG screenshot file input me daalein
+    const fileInput = document.querySelector('[data-prop-file="Preview"]');
+    if (fileInput && canvas.width && canvas.height) {
+      try {
+        canvas.toBlob(blob => {
+          if (!blob) { console.warn("dc-preview: blob null, canvas tainted ho sakta hai"); return; }
+          const file = new File([blob], "label-preview.png", { type: "image/png" });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          fileInput.files = dt.files;
+        }, "image/png");
+      } catch (err) {
+        console.error("dc-preview toBlob error:", err);
+      }
+    }
+
+    // print SVG (high-res originals + text outlines)
+    attachPrintFile();
+  }
+
+  /* ---------- the cart form ---------- */
+  // Themes such as Dawn re-render the product form when the variant changes, so
+  // the hidden inputs are put back whenever that happens.
+  function attachToForm() {
+    const holder = document.querySelector("[data-dc=props]");
+    if (!holder) return;
+    const form = document.querySelector('form[data-type="add-to-cart-form"]')
+              || document.querySelector('form[action*="/cart/add"]:not([id*="installment"])');
+    if (form && !form.contains(holder)) form.appendChild(holder);
+  }
+  function watchForm() {
+    attachToForm();
+    const target = document.querySelector("product-info, .product, main") || document.body;
+    new MutationObserver(() => attachToForm()).observe(target, { childList: true, subtree: true });
+    document.addEventListener("change", attachToForm, true);
+  }
+  (function moveMedia() {
+    const preview = root.querySelector(".dc-preview");
+    const wrapper = document.querySelector(".product__media-wrapper");
+    if (!preview || !wrapper) return;
+    const gallery = wrapper.querySelector("media-gallery");
+    if (gallery) gallery.style.display = "none";
+    wrapper.appendChild(preview);
+  })();
+
+  /* ---------- go ---------- */
+  (async function () {
+    const nameEl = $("[data-dc=name]");
+    nameEl.addEventListener("input", e => {
+      state.name = e.target.value;
+      $("[data-dc=count]").textContent = state.name.length + " / 100";
+      paintSwatches(); update();
+    });
+    paintSwatches();
+    watchForm();
+    await needCurrent();
+    update();
+    root.classList.add("dc-ready");
+    await loadFonts();
+    if (document.fonts) await document.fonts.ready;
+    paintSwatches();
+    update();
+    // the rest arrive quietly once the page is settled
+    const rest = () => {
+      D.icons.filter(i => i.theme === state.theme).forEach(i => need("i:" + i.id, url(i.file)));
+      D.backgrounds.forEach(b => need("b:" + b.id, url(b.file)));
+      D.icons.forEach(i => need("i:" + i.id, url(i.file)));
+    };
+    if (window.requestIdleCallback) requestIdleCallback(rest, { timeout: 3000 });
+    else setTimeout(rest, 1200);
+  })();
+})();
+</script>
